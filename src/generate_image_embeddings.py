@@ -163,6 +163,10 @@ model_name = "google/vit-base-patch16-224"
 # model_name = "open-eye/RETFound_MAE"
 embedder = VisionEmbedder(model_name)
 
+################################################################################
+## GENERATE EMBEDDINGS
+################################################################################
+
 embeddings_to_return = []
 
 for p in tqdm(paths):
@@ -173,18 +177,7 @@ for p in tqdm(paths):
         {"EMBED_{}".format(i): vec[i] for i in range(len(vec))}
     )
 
-# Example usage with a Hugging Face vision model
-
-image = dicom_to_pil("./data/aireadi/retinal_photography/cfp/icare_eidon/1001/1001_eidon_uwf_central_cfp_r_1.2.826.0.1.3680043.8.641.1.20230809.2041.31942.dcm")
-embedding = get_vit_embedding(image)
-
-
-
-print(embedding.shape)  # (768,) for vit-base
-
-################################################################################
-## GENERATE EMBEDDINGS
-################################################################################
-
+embedding_dataframe = pd.DataFrame(embeddings_to_return)
+embedding_dataframe.to_csv('./calc/cfp/embeddings/vit_embeddings_eidon.csv')
 
 print("All done!")
