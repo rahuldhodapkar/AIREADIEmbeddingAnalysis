@@ -1,0 +1,11 @@
+
+# Do not commit heavy data folders
+data
+fig
+calc
+
+# Editor artifacts
+.DS_Store
+*.swp
+*.swo
+
