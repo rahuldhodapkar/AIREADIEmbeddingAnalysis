@@ -28,5 +28,36 @@ The goal is to understand whether **image-derived features capture clinically me
 
 This is a research-focused project intended to study **multimodal representation learning in healthcare**. It is not designed for clinical use.
 
+## Development setup
+### For macOS
+
+You may need to hash out some verison management for python. This code is
+tested with `python 3.11.X`.
+
+    brew install pyenv
+    pyenv install 3.11.13
+    brew install pyenv-virtualenv
+    pyenv virtualenv 3.11.13 ai-readi-embed
+
+You will then need to add the following entries to `.zprofile`
+
+    export PYENV_ROOT="$HOME/.pyenv"
+    export PATH="$PYENV_ROOT/bin:$PATH"
+    eval "$(pyenv init --path)"
+
+And `.zshrc`
+
+    eval "$(pyenv init -)"
+    eval "$(pyenv virtualenv-init -)"
+
+To summarize, if you have `pyenv` already installed, you can simply run:
+
+    pyenv virtualenv 3.11.13 ai-readi-embed
+    pyenv activate ai-readi-embed
+    pip install -r requirements.txt
+
+to create the appropriate environment.
+
+
 
 Author: Rahul Dhodapkar
