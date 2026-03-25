@@ -10,3 +10,7 @@ accelerate
 safetensors
 torchvision
 huggingface_hub
+matplotlib
+scipy
+fastdtw
+scikit-learn
