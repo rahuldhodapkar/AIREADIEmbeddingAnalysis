@@ -19,12 +19,17 @@ from PIL import Image
 import re
 import pandas as pd
 from tqdm import tqdm
+from scipy.spatial.distance import pdist, squareform
+from sklearn.manifold import MDS
+import matplotlib.pyplot as plt
+
 
 ################################################################################
 ## BUILD OUTPUT SCAFFOLDING
 ################################################################################
 
 os.makedirs('./calc/cfp/embeddings', exist_ok=True)
+os.makedirs('./fig/cfp/embeddings', exist_ok=True)
 
 ################################################################################
 ## DEFINE CONSTANTS
@@ -167,17 +172,89 @@ embedder = VisionEmbedder(model_name)
 ## GENERATE EMBEDDINGS
 ################################################################################
 
-embeddings_to_return = []
+all_embeddings = []
 
 for p in tqdm(paths):
     image = dicom_to_pil(p)
     vec = embedder.embed(image)
-    embeddings_to_return.append(
-        {"PATH": p} |
-        {"EMBED_{}".format(i): vec[i] for i in range(len(vec))}
+    all_embeddings.append(
+        vec
     )
 
-embedding_dataframe = pd.DataFrame(embeddings_to_return)
-embedding_dataframe.to_csv('./calc/cfp/embeddings/vit_embeddings_eidon.csv')
+Dx = squareform(pdist(all_embeddings, metric="euclidean"))
+
+# D = your (n x n) distance matrix
+mds = MDS(n_components=2, dissimilarity='precomputed', random_state=0)
+
+X = mds.fit_transform(Dx)
+
+plt.scatter(X[:, 0], X[:, 1])
+plt.title("MDS embedding")
+plt.xlabel("Component 1")
+plt.ylabel("Component 2")
+plt.show()
+
+
+################################################################################
+## COMPARE WITH DIABETES PARAMETERS
+################################################################################
+
+# Extract subject information from the PATH
+pattern = re.compile(r"icare_eidon/([0-9]+)/")
+subjects = [pattern.search(s).groups()[0] for s in paths if pattern.search(s)]
+
+
+clinical_df = pd.read_csv('./data/aireadi/clinical_data/measurement.csv')
+
+# Creatinine: 
+# "measurement_source_value" = "Urine Creatinine (mg/dL)"
+creatinine_map = {}
+tmp_df = clinical_df[clinical_df["measurement_source_value"] == "Urine Creatinine (mg/dL)"]
+for i in range(tmp_df.shape[0]):
+    creatinine_map[str(tmp_df['person_id'].iloc[i])] = tmp_df['value_as_number'].iloc[i]
+
+# HbA1c (%)
+# "measurement_source_value" = "HbA1c (%)"
+hgba1c_map = {}
+tmp_df = clinical_df[clinical_df["measurement_source_value"] == "HbA1c (%)"]
+for i in range(tmp_df.shape[0]):
+    hgba1c_map[str(tmp_df['person_id'].iloc[i])] = tmp_df['value_as_number'].iloc[i]
+
+
+plot_df = pd.DataFrame.from_dict({
+    "Subject": subjects,
+    "MDS1": X[:, 0],
+    "MDS2": X[:, 1],
+    "UrineCr": [creatinine_map[s] if s in creatinine_map else np.nan for s in subjects],
+    "HgbA1c": [hgba1c_map[s] if s in hgba1c_map else np.nan for s in subjects],
+})
+
+plot_df.to_csv('./calc/cfp/embeddings/mds_plot_df.csv')
+
+
+
+sc = plt.scatter(
+    plot_df['MDS1'],
+    plot_df['MDS2'],
+    c=plot_df['HgbA1c'],
+    cmap="viridis",   # color map
+)
+
+# Add colorbar
+cbar = plt.colorbar(sc)
+cbar.set_label("HgbA1c")
+
+plt.xlabel("MDS1")
+plt.ylabel("MDS2")
+plt.title("MDS embedding colored by HgbA1c")
+
+plt.tight_layout()
+
+# Save in multiple formats
+plt.savefig("./fig/cfp/embeddings/hgba1c_cfp_mds_plot.png", dpi=300)   # high-res PNG
+plt.savefig("./fig/cfp/embeddings/hgba1c_cfp_mds_plot.svg")            # vector SVG
+
+plt.show()
+
 
 print("All done!")
