@@ -24,6 +24,8 @@ from tqdm import tqdm
 import re
 import pandas as pd
 
+import pickle
+
 
 ################################################################################
 ## DEFINE CONSTANTS
@@ -151,7 +153,7 @@ for path in tqdm(paths):
             trace.append(tmp_value)
         all_traces.append(trace)
 
-
+"""
 # Now compute DTW distance from FFT for all traces
 Dx = np.zeros(shape=(len(all_traces),len(all_traces)))
 
@@ -161,7 +163,7 @@ for i in tqdm(range(len(all_traces))):
 
 
 # Plot MDS from distances
-
+"""
 
 traces = [np.asarray(t, dtype=np.float64) for t in all_traces]
 
@@ -179,6 +181,12 @@ np.savetxt('./calc/cgm/fft/dtw_distance.csv', Dx, delimiter=',', fmt='%.4f')
 max_finite = np.max(Dx[np.isfinite(Dx)])
 Dx[~np.isfinite(Dx)] = max_finite
 
+# Save distance matrix
+with open('./calc/cgm/fft/cgm_dtw_dist.pkl', 'wb') as file:
+    pickle.dump(Dx, file)
+
+print("Saved distance matrix to file")
+
 
 # D = your (n x n) distance matrix
 mds = MDS(n_components=2, dissimilarity='precomputed', random_state=0)
@@ -189,7 +197,7 @@ plt.scatter(X[:, 0], X[:, 1])
 plt.title("MDS embedding")
 plt.xlabel("Component 1")
 plt.ylabel("Component 2")
-plt.show()
+#plt.show()
 
 ################################################################################
 ## COMPARE WITH DIABETES PARAMETERS
@@ -248,7 +256,7 @@ plt.tight_layout()
 plt.savefig("./fig/cgm/fft/hgba1c_mds_plot.png", dpi=300)   # high-res PNG
 plt.savefig("./fig/cgm/fft/hgba1c_mds_plot.svg")            # vector SVG
 
-plt.show()
+# plt.show()
 
 sc = plt.scatter(
     plot_df['MDS1'],
@@ -271,7 +279,7 @@ plt.tight_layout()
 plt.savefig("./fig/cgm/fft/creatinine_mds_plot.png", dpi=300)   # high-res PNG
 plt.savefig("./fig/cgm/fft/creatinine_mds_plot.svg")            # vector SVG
 
-plt.show()
+# plt.show()
 
 
 print("All done!")

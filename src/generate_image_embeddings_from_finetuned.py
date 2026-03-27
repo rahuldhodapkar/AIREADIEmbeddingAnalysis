@@ -33,6 +33,9 @@ from tqdm import tqdm
 from scipy.spatial.distance import pdist, squareform
 from sklearn.manifold import MDS
 import matplotlib.pyplot as plt
+import pickle
+import os
+import pandas as pd
 
 ################################################################################
 ## BUILD OUTPUT SCAFFOLDING
@@ -203,6 +206,11 @@ mds = MDS(n_components=2, dissimilarity='precomputed', random_state=0)
 
 X = mds.fit_transform(Dx)
 
+# Save distance matrix
+with open('./calc/finetune/vit_aptos/finetune_vit_embed_dist.pkl', 'wb') as file:
+    pickle.dump(Dx, file)
+
+print("Saved distance matrix to file")
 
 ################################################################################
 ## COMPARE WITH DIABETES PARAMETERS
