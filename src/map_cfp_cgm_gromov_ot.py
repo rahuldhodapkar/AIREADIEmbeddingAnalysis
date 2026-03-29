@@ -17,7 +17,8 @@ import os
 import re
 from collections import defaultdict
 from scipy.linalg import svd
-
+from scipy import stats
+import matplotlib.pyplot as plt
 
 ################################################################################
 ## BUILD OUTPUT SCAFFOLDING
@@ -25,6 +26,11 @@ from scipy.linalg import svd
 
 os.makedirs('./calc/ot/cgm_to_cfp', exist_ok=True)
 os.makedirs('./fig/ot/cgm_to_cfp', exist_ok=True)
+
+
+################################################################################
+## HELPER FUNCTIONS
+################################################################################
 
 
 def get_image_paths_os_walk(directory):
@@ -134,276 +140,104 @@ cgm_subjects = [pattern.search(s).groups()[0] for s in paths if pattern.search(s
 # a natural shared structure between the two data domains.
 #
 
-# Optional: Normalize the distance matrices
-# C1 /= C1.max()
-# C2 /= C2.max()
+# Generate a subset of each dataset that has a 1-1 mapping between domains
+# for easier comparison
 
-# ----------------------------
-# Classical MDS
-# ----------------------------
-def classical_mds(D, n_components=10):
-    D = np.asarray(D, dtype=float)
-    n = D.shape[0]
-    if D.shape[0] != D.shape[1]:
-        raise ValueError("Distance matrix must be square.")
+common_subjects = list(set(cfp_subjects) & set(cgm_subjects))
 
-    J = np.eye(n) - np.ones((n, n)) / n
-    B = -0.5 * J @ (D ** 2) @ J
-
-    evals, evecs = np.linalg.eigh(B)
-    idx = np.argsort(evals)[::-1]
-    evals = evals[idx]
-    evecs = evecs[:, idx]
-
-    pos = evals > 1e-12
-    evals = evals[pos]
-    evecs = evecs[:, pos]
-
-    k = min(n_components, len(evals))
-    return evecs[:, :k] * np.sqrt(evals[:k])
+cfp_indices_to_select = []
+cgm_indices_to_select = []
+for subj in common_subjects:
+    for i in range(len(cfp_subjects)):
+        if cfp_subjects[i] == subj:
+            cfp_indices_to_select.append(i)
+            break
+    for i in range(len(cgm_subjects)):
+        if cgm_subjects[i] == subj:
+            cgm_indices_to_select.append(i)
+            break
 
 
-# ----------------------------
-# Procrustes alignment
-# ----------------------------
-def fit_orthogonal_procrustes(X_src, X_tgt):
-    X_src = np.asarray(X_src, dtype=float)
-    X_tgt = np.asarray(X_tgt, dtype=float)
-
-    src_mean = X_src.mean(axis=0)
-    tgt_mean = X_tgt.mean(axis=0)
-
-    Xs = X_src - src_mean
-    Xt = X_tgt - tgt_mean
-
-    M = Xs.T @ Xt
-    U, _, Vt = svd(M, full_matrices=False)
-    R = U @ Vt
-
-    if np.linalg.det(R) < 0:
-        U[:, -1] *= -1
-        R = U @ Vt
-
-    return {"R": R, "src_mean": src_mean, "tgt_mean": tgt_mean}
+cfp_indices_to_select = sorted(cfp_indices_to_select)
+cgm_indices_to_select = sorted(cgm_indices_to_select)
 
 
-def transform_source(X_src, model):
-    return (np.asarray(X_src) - model["src_mean"]) @ model["R"] + model["tgt_mean"]
+C1_sub = np.take(np.take(C1, cfp_indices_to_select, axis=0), cfp_indices_to_select, axis=1)
+C2_sub = np.take(np.take(C2, cgm_indices_to_select, axis=0), cgm_indices_to_select, axis=1)
+
+# C1_sub and C2_sub are now co-registered in terms of subjects
+
+# Normalize (recommended for stability)
+C1_sub /= C1_sub.max()
+C2_sub /= C2_sub.max()
+
+n1 = C1_sub.shape[0]
+n2 = C2_sub.shape[0]
+
+# Uniform distributions over points
+p = np.ones(n1) / n1
+q = np.ones(n2) / n2
 
 
-# ----------------------------
-# Label utilities
-# ----------------------------
-def make_label_index_map(labels):
-    lab2idx = defaultdict(list)
-    for i, lab in enumerate(labels):
-        lab2idx[lab].append(i)
-    return lab2idx
-
-
-def split_labels_for_train_test(cfp_subjects, cgm_subjects, test_frac=0.3, random_state=0):
-    """
-    Split by labels, not by points.
-
-    Train labels are used only for fitting.
-    Test labels are held out entirely for evaluation.
-    """
-    rng = np.random.default_rng(random_state)
-
-    src_map = make_label_index_map(cfp_subjects)
-    tgt_map = make_label_index_map(cgm_subjects)
-
-    common_labels = sorted(set(src_map).intersection(tgt_map))
-    if len(common_labels) < 2:
-        raise ValueError("Need at least 2 common labels to split train/test by label.")
-
-    rng.shuffle(common_labels)
-
-    n_test = max(1, int(round(test_frac * len(common_labels))))
-    n_test = min(n_test, len(common_labels) - 1)
-
-    test_labels = set(common_labels[:n_test])
-    train_labels = set(common_labels[n_test:])
-
-    return train_labels, test_labels, src_map, tgt_map
-
-
-def make_pairs_from_labels(labels, src_map, tgt_map):
-    """
-    All same-label cross-product pairs for the given label set.
-    """
-    pairs = []
-    for lab in labels:
-        src_idx = src_map.get(lab, [])
-        tgt_idx = tgt_map.get(lab, [])
-        if len(src_idx) == 0 or len(tgt_idx) == 0:
-            continue
-        pairs.extend([(i, j) for i in src_idx for j in tgt_idx])
-    return pairs
-
-
-# ----------------------------
-# Evaluation
-# ----------------------------
-def evaluate_alignment(X_src_aligned, X_tgt, cfp_subjects, cgm_subjects, test_labels, src_map, tgt_map):
-    """
-    Evaluate retrieval on held-out labels only.
-    For each test source point, ask whether the nearest held-out target point
-    has the same label.
-    """
-    cfp_subjects = np.asarray(cfp_subjects)
-    cgm_subjects = np.asarray(cgm_subjects)
-
-    test_src_idx = np.array([i for lab in test_labels for i in src_map[lab]], dtype=int)
-    test_tgt_idx = np.array([j for lab in test_labels for j in tgt_map[lab]], dtype=int)
-
-    if len(test_src_idx) == 0 or len(test_tgt_idx) == 0:
-        raise ValueError("No held-out test points available.")
-
-    Y = X_tgt[test_tgt_idx]
-    Y_lab = cgm_subjects[test_tgt_idx]
-
-    top1_hits = []
-    same_label_ranks = []
-
-    for i in test_src_idx:
-        lab = cfp_subjects[i]
-        x = X_src_aligned[i]
-
-        dists = np.linalg.norm(Y - x, axis=1)
-
-        # nearest target overall
-        nn = np.argmin(dists)
-        top1_hits.append(Y_lab[nn] == lab)
-
-        # rank of nearest same-label target
-        same_mask = (Y_lab == lab)
-        if np.any(same_mask):
-            d_same = np.min(dists[same_mask])
-            rank = 1 + np.sum(dists < d_same)
-            same_label_ranks.append(rank)
-
-    return {
-        "top1_accuracy": float(np.mean(top1_hits)) if top1_hits else np.nan,
-        "mean_same_label_rank": float(np.mean(same_label_ranks)) if same_label_ranks else np.nan,
-        "n_test_source": int(len(test_src_idx)),
-        "n_test_target": int(len(test_tgt_idx)),
-        "n_evaluated": int(len(top1_hits)),
-    }
-
-
-def permutation_test_top1(X_src_aligned, X_tgt, cfp_subjects, cgm_subjects, test_labels, src_map, tgt_map,
-                          n_perm=2000, random_state=0):
-    rng = np.random.default_rng(random_state)
-
-    cfp_subjects = np.asarray(cfp_subjects)
-    cgm_subjects = np.asarray(cgm_subjects)
-
-    test_src_idx = np.array([i for lab in test_labels for i in src_map[lab]], dtype=int)
-    test_tgt_idx = np.array([j for lab in test_labels for j in tgt_map[lab]], dtype=int)
-
-    Y = X_tgt[test_tgt_idx]
-    true_labels = cgm_subjects[test_tgt_idx]
-
-    def score(labels):
-        hits = []
-        labels = np.asarray(labels)
-        for i in test_src_idx:
-            lab = cfp_subjects[i]
-            x = X_src_aligned[i]
-            dists = np.linalg.norm(Y - x, axis=1)
-            nn = np.argmin(dists)
-            hits.append(labels[nn] == lab)
-        return float(np.mean(hits)) if hits else np.nan
-
-    observed = score(true_labels)
-    null_scores = np.empty(n_perm, dtype=float)
-
-    for b in range(n_perm):
-        null_scores[b] = score(rng.permutation(true_labels))
-
-    p_value = (1 + np.sum(null_scores >= observed)) / (n_perm + 1)
-
-    return {
-        "observed_top1_accuracy": observed,
-        "null_mean": float(np.mean(null_scores)),
-        "null_std": float(np.std(null_scores, ddof=1)),
-        "p_value": float(p_value),
-        "null_scores": null_scores,
-    }
-
-
-# ----------------------------
-# End-to-end pipeline
-# ----------------------------
-def align_and_test(
-    C1,
-    C2,
-    cfp_subjects,
-    cgm_subjects,
-    n_components=10,
-    test_frac=0.3,
-    random_state=0,
-    n_perm=2000,
-):
-    # Embed
-    X1 = classical_mds(C1, n_components=n_components)
-    X2 = classical_mds(C2, n_components=n_components)
-
-    # Split by label
-    train_labels, test_labels, src_map, tgt_map = split_labels_for_train_test(
-        cfp_subjects, cgm_subjects, test_frac=test_frac, random_state=random_state
-    )
-
-    # Training pairs = all same-label cross pairs for train labels
-    train_pairs = make_pairs_from_labels(train_labels, src_map, tgt_map)
-
-    if len(train_pairs) < n_components:
-        raise ValueError(
-            f"Not enough training pairs to fit a {n_components}-D alignment. "
-            f"Got {len(train_pairs)} pairs across {len(train_labels)} train labels."
-        )
-
-    src_train_idx = np.array([i for i, j in train_pairs], dtype=int)
-    tgt_train_idx = np.array([j for i, j in train_pairs], dtype=int)
-
-    # Fit and transform
-    model = fit_orthogonal_procrustes(X1[src_train_idx], X2[tgt_train_idx])
-    X1_aligned = transform_source(X1, model)
-
-    # Evaluate on held-out labels
-    eval_result = evaluate_alignment(
-        X1_aligned, X2, cfp_subjects, cgm_subjects, test_labels, src_map, tgt_map
-    )
-
-    perm_result = permutation_test_top1(
-        X1_aligned, X2, cfp_subjects, cgm_subjects, test_labels, src_map, tgt_map,
-        n_perm=n_perm, random_state=random_state
-    )
-
-    return {
-        "embedding_source": X1,
-        "embedding_target": X2,
-        "alignment_model": model,
-        "train_labels": train_labels,
-        "test_labels": test_labels,
-        "train_pairs": train_pairs,
-        "X1_aligned": X1_aligned,
-        "evaluation": eval_result,
-        "permutation_test": perm_result,
-    }
-
-
-result = align_and_test(
-    C1=C1,
-    C2=C2,
-    cfp_subjects=cfp_subjects,
-    cgm_subjects=cgm_subjects,
-    n_components=10,
-    test_frac=0.2,
-    random_state=0,
-    n_perm=1000,
+# Compute GW distance (squared) + transport plan
+gw_dist2, log = ot.gromov.gromov_wasserstein2(
+    C1_sub,
+    C2_sub,
+    p,
+    q,
+    loss_fun="square_loss",
+    log=True,
 )
 
-print(result["evaluation"])
-print(result["permutation_test"])
+T = log["T"]  # transport plan
+
+print("GW distance^2:", gw_dist2)
+print("Transport shape:", T.shape)
+
+correct_map_distance = []
+avg_map_distance = []
+
+for i in range(T.shape[0]):
+    v1 = np.zeros(T.shape[0])
+    v1[i] = 1
+    v2 = v1 @ T
+    dists = v2 @ C2_sub
+    correct_map_distance.append(dists[i])
+    avg_map_distance.append(np.mean(dists))
+
+
+
+paired_diff = [correct_map_distance[i] - avg_map_distance[i] for i in range(len(correct_map_distance))]
+
+
+
+t_stat, p_value = stats.ttest_ind(correct_map_distance, avg_map_distance)
+
+print("t =", t_stat)
+print("p =", p_value)
+
+u_stat, p_value = stats.mannwhitneyu(correct_map_distance, avg_map_distance, alternative='two-sided')
+
+print("U statistic:", u_stat)
+print("p-value:", p_value)
+
+
+
+plt.figure()
+plt.boxplot(
+    [correct_map_distance, avg_map_distance, paired_diff],
+    labels=["Correct Target", "Average Target", "Paired Difference"],
+    showfliers=False)
+plt.axhline(0, linestyle="--")
+plt.show()
+
+
+
+diff = avg_map_distance - correct_map_distance
+plt.boxplot(diff)
+plt.axhline(0, linestyle="--")
+plt.title("Paired Differences (B - A)")
+plt.show()
+
+
+print("All done!")
