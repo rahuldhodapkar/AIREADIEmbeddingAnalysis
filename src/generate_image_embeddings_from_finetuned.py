@@ -40,8 +40,8 @@ import pandas as pd
 ################################################################################
 ## BUILD OUTPUT SCAFFOLDING
 ################################################################################
-
 os.makedirs('./calc/finetune/vit_aptos', exist_ok=True)
+os.makedirs('./calc/finetune/vit_aptos/eidonimages', exist_ok=True)
 os.makedirs('./fig/finetune/vit_aptos', exist_ok=True)
 
 ################################################################################
@@ -118,7 +118,7 @@ def get_image_paths_os_walk(directory):
 
 class VisionEmbedder:
     def __init__(self, model_name: str, device: str | None = None):
-        self.processor = AutoImageProcessor.from_pretrained(MODEL_DIR)
+        self.processor = AutoImageProcessor.from_pretrained(MODEL_DIR, use_fast=False)
         self.model = AutoModelForImageClassification.from_pretrained(MODEL_DIR)
         self.model.eval()
         #
@@ -193,6 +193,7 @@ all_embeddings = []
 
 for p in tqdm(paths):
     image = dicom_to_pil(p)
+    image.save('./calc/finetune/vit_aptos/eidonimages/{}.png'.format(Path(p).stem))
     vec = embedder.embed(image)
     all_embeddings.append(
         vec
@@ -271,7 +272,38 @@ plt.tight_layout()
 plt.savefig("./fig/cfp/embeddings/hgba1c_finetune_cfp_mds_plot.png", dpi=300)   # high-res PNG
 plt.savefig("./fig/cfp/embeddings/hgba1c_finetune_cfp_mds_plot.svg")            # vector SVG
 
-plt.show()
+# plt.show()
+
+# Save with labels
+sc = plt.scatter(
+    plot_df['MDS1'],
+    plot_df['MDS2'],
+    c=plot_df['HgbA1c'],
+    cmap="viridis",   # color map
+)
+
+# Annotate each point
+for i, label in enumerate(subjects):
+    plt.annotate(label, # This is the text label
+                 (plot_df['MDS1'][i], plot_df['MDS2'][i]), # This is the point to annotate (x, y)
+                 textcoords="offset points", # How to position the text
+                 xytext=(0, 10), # Distance from the point (x, y)
+                 ha='center') # Horizontal alignment of the text
+
+# Add colorbar
+cbar = plt.colorbar(sc)
+cbar.set_label("HgbA1c")
+
+plt.xlabel("MDS1")
+plt.ylabel("MDS2")
+plt.title("MDS embedding colored by HgbA1c")
+
+plt.tight_layout()
+
+# Save in multiple formats
+plt.savefig("./fig/cfp/embeddings/hgba1c_finetune_cfp_mds_plot_labeled.png", dpi=300)   # high-res PNG
+plt.savefig("./fig/cfp/embeddings/hgba1c_finetune_cfp_mds_plot_labeled.svg")            # vector SVG
+
 
 
 
