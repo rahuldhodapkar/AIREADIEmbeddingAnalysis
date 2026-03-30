@@ -229,15 +229,10 @@ plt.boxplot(
     labels=["Correct Target", "Average Target", "Paired Difference"],
     showfliers=False)
 plt.axhline(0, linestyle="--")
-plt.show()
+# plt.show()
 
-
-
-diff = avg_map_distance - correct_map_distance
-plt.boxplot(diff)
-plt.axhline(0, linestyle="--")
-plt.title("Paired Differences (B - A)")
-plt.show()
+plt.savefig("./fig/ot/cgm_to_cfp/comparator_boxplot.png", dpi=300)   # high-res PNG
+plt.savefig("./fig/ot/cgm_to_cfp/comparator_boxplot.svg")            # vector SVG
 
 
 print("All done!")
