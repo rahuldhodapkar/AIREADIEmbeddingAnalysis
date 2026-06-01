@@ -232,13 +232,13 @@ class Model(nn.Module):
         y_hat = g_hat
         return y_hat, g_hat, X_hat, Ra, I, (p1, p2, p3)
 
-
+# all_traces = all_traces[:100]
 
 for i in tqdm(range(len(all_traces))):
-    T = len(all_traces[i])
+    T = min(len(all_traces[i]), 288) #clip to 24hrs if recording longer than that
     dt = 1.0
     hours = np.arange(T) * 5.0 / 60.0 # sampling every 5 minutes
-    glucose = np.array(all_traces[i])
+    glucose = np.array(all_traces[i][:T])
     #
     # normalize for fitting stability
     mu = glucose.mean()
@@ -276,9 +276,9 @@ for i in tqdm(range(len(all_traces))):
         y_hat, g_hat, X_hat, Ra, I, params = model()
     #
     p1, p2, p3 = params
-    p1_vals.append(p1)
-    p2_vals.append(p2)
-    p3_vals.append(p3)
+    p1_vals.append(p1.to('cpu').item())
+    p2_vals.append(p2.to('cpu').item())
+    p3_vals.append(p3.to('cpu').item())
     #
     # rescale back to mg/dL
     pred = y_hat.to('cpu').numpy() * sd + mu
