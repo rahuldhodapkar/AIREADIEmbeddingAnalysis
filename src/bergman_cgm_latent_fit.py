@@ -183,57 +183,19 @@ for path in tqdm(paths):
 ## FIT BERGMAN MODEL
 ################################################################################
 
-i = 0
-
-T = len(all_traces[i])
-dt = 1.0
-hours = np.arange(T) * 5.0 / 60.0 # sampling every 5 minutes
-
-"""
-# demo ground truth
-meal_events = np.zeros(T)
-for idx, amp in [(18, 2.0), (58, 1.4), (110, 2.2), (150, 1.5)]:
-    meal_events[idx] += amp
-
-def gamma_kernel(length=50, a=3.5, b=5.5):
-    x = np.arange(length)
-    k = (x ** (a - 1)) * np.exp(-x / b)
-    k[0] = 0.0
-    k /= k.sum()
-    return k
-
-meal_kernel = gamma_kernel()
-true_Ra = np.convolve(meal_events, meal_kernel, mode='full')[:T]
-true_I = np.zeros(T)
-for idx, amp in [(18, 0.8), (58, 0.6), (110, 0.9), (150, 0.5)]:
-    w = np.arange(T - idx)
-    true_I[idx:] += amp * np.exp(-w / 16.0)
-
-Gb_true = 104.0
-p1_true, p2_true, p3_true = 0.04, 0.12, 0.22
-
-g = np.zeros(T)
-X = np.zeros(T)
-for k in range(T - 1):
-    g[k + 1] = g[k] + dt * (-(p1_true + X[k]) * g[k] + 0.12 * true_Ra[k])
-    X[k + 1] = X[k] + dt * (-p2_true * X[k] + p3_true * 0.12 * true_I[k])
-
-noise = np.random.normal(0, 1.8, size=T)
-glucose = Gb_true + g + noise
-"""
-
-glucose = np.array(all_traces[i])
-
+p1_vals = []
+p2_vals = []
+p3_vals = []
 
 device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 dtype = torch.float32
 
-# normalize for fitting stability
-mu = glucose.mean()
-sd = glucose.std() + 1e-6
-y = torch.tensor((glucose - mu) / sd, dtype=dtype)
 
-y = y.to(device=device, dtype=dtype)
+def tv(x):
+    return torch.sum(torch.abs(x[1:] - x[:-1]))
+
+def l2diff(x):
+    return torch.sum((x[1:] - x[:-1]) ** 2)
 
 class Model(nn.Module):
     def __init__(self, T, dt):
@@ -270,71 +232,92 @@ class Model(nn.Module):
         y_hat = g_hat
         return y_hat, g_hat, X_hat, Ra, I, (p1, p2, p3)
 
-def tv(x):
-    return torch.sum(torch.abs(x[1:] - x[:-1]))
 
-def l2diff(x):
-    return torch.sum((x[1:] - x[:-1]) ** 2)
 
-# Make sure y is on the same device and dtype
-y = y.to(device=device, dtype=dtype)
-
-model = Model(T, dt).to(device)
-opt = torch.optim.Adam(model.parameters(), lr=0.02)
-
-for step in tqdm(range(500)):
-    opt.zero_grad()
+for i in tqdm(range(len(all_traces))):
+    T = len(all_traces[i])
+    dt = 1.0
+    hours = np.arange(T) * 5.0 / 60.0 # sampling every 5 minutes
+    glucose = np.array(all_traces[i])
     #
-    y_hat, g_hat, X_hat, Ra, I, params = model()
-    mse = torch.mean((y_hat - y) ** 2)
+    # normalize for fitting stability
+    mu = glucose.mean()
+    sd = glucose.std() + 1e-6
+    y = torch.tensor((glucose - mu) / sd, dtype=dtype)
     #
-    loss = (
-        mse
-        + 0.10 * torch.mean(Ra)
-        + 0.03 * tv(Ra) / T
-        + 0.02 * l2diff(I) / T
-        + 0.01 * torch.mean(I)
-        + 0.002 * l2diff(X_hat) / T
-    )
+    y = y.to(device=device, dtype=dtype)
     #
-    loss.backward()
-    opt.step()
+    model = Model(T, dt).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=0.02)
     #
-    if step % 100 == 0 or step == 499:
-        p1, p2, p3 = [v.item() for v in params]
-        print(step, loss.item(), mse.item(), p1, p2, p3)
+    for step in range(500):
+        opt.zero_grad()
+        #
+        y_hat, g_hat, X_hat, Ra, I, params = model()
+        mse = torch.mean((y_hat - y) ** 2)
+        #
+        loss = (
+            mse
+            + 0.10 * torch.mean(Ra)
+            + 0.03 * tv(Ra) / T
+            + 0.02 * l2diff(I) / T
+            + 0.01 * torch.mean(I)
+            + 0.002 * l2diff(X_hat) / T
+        )
+        #
+        loss.backward()
+        opt.step()
+        #
+        if step % 100 == 0 or step == 499:
+            p1, p2, p3 = [v.item() for v in params]
+            print(step, loss.item(), mse.item(), p1, p2, p3)
+    #
+    with torch.no_grad():
+        y_hat, g_hat, X_hat, Ra, I, params = model()
+    #
+    p1, p2, p3 = params
+    p1_vals.append(p1)
+    p2_vals.append(p2)
+    p3_vals.append(p3)
+    #
+    # rescale back to mg/dL
+    pred = y_hat.to('cpu').numpy() * sd + mu
+    meal = Ra.to('cpu').numpy()
+    ins = I.to('cpu').numpy()
+    Xhat = X_hat.to('cpu').numpy()
+    #
+    outdir = Path('./fig/cgm/bergman_fit')
+    fig1 = outdir / 'fit_{}.png'.format(i)
+    fig2 = outdir / 'latent_{}.png'.format(i)
+    #
+    plt.figure(figsize=(11, 4))
+    plt.plot(hours, glucose, label='Observed CGM')
+    plt.plot(hours, pred, label='Fitted glucose')
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Glucose (mg/dL)')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(fig1, dpi=160)
+    plt.close()
+    #
+    plt.figure(figsize=(11, 4.5))
+    plt.plot(hours, meal, label='Latent meal appearance')
+    plt.plot(hours, ins, label='Latent insulin drive')
+    plt.plot(hours, Xhat, label='Remote insulin action')
+    plt.xlabel('Time (hours)')
+    plt.ylabel('Latent units')
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(fig2, dpi=160)
+    plt.close()
+    #
+    torch.save(model, './calc/cgm/bergman_fit/model_{}.pth'.format(i))
 
-with torch.no_grad():
-    y_hat, g_hat, X_hat, Ra, I, params = model()
+df = pd.DataFrame({
+    'p1': p1_vals,
+    'p2': p2_vals,
+    'p3': p3_vals
+})
+df.to_csv('./calc/cgm/bergman_fit/all_fit_dataframe.csv', index=False)
 
-# rescale back to mg/dL
-pred = y_hat.to('cpu').numpy() * sd + mu
-meal = Ra.to('cpu').numpy()
-ins = I.to('cpu').numpy()
-Xhat = X_hat.to('cpu').numpy()
-
-outdir = Path('./fig/cgm/bergman_fit')
-fig1 = outdir / 'fit.png'
-fig2 = outdir / 'latent.png'
-
-
-plt.figure(figsize=(11, 4))
-plt.plot(hours, glucose, label='Observed CGM')
-plt.plot(hours, pred, label='Fitted glucose')
-plt.xlabel('Time (hours)')
-plt.ylabel('Glucose (mg/dL)')
-plt.legend()
-plt.tight_layout()
-plt.savefig(fig1, dpi=160)
-plt.close()
-
-plt.figure(figsize=(11, 4.5))
-plt.plot(hours, meal, label='Latent meal appearance')
-plt.plot(hours, ins, label='Latent insulin drive')
-plt.plot(hours, Xhat, label='Remote insulin action')
-plt.xlabel('Time (hours)')
-plt.ylabel('Latent units')
-plt.legend()
-plt.tight_layout()
-plt.savefig(fig2, dpi=160)
-plt.close()
+print('All done!')
